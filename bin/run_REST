@@ -1,0 +1,270 @@
+#!/usr/bin/perl
+#
+# run_REST - parses the XML input data file, generates WAPI calls out of it, sends the requests, 
+#            compares the responses with the expected output and generates the report
+#
+# Author : Subramani R
+# History :
+## 08/21/12 (Subramani R) - Created
+## 09/03/12 (Subramani R) - Modified to use same session for all the operations in a test execution
+## 09/11/12 (Subramani R) - Support is added for POST and PUT to send requests with JSON content-type
+## 09/13/12 (Subramani R) - Changed the 'get_reference' subroutine, because now the reference return '/'
+##                          instead of '%2F'
+## 08/05/13 (Madhu Kumar) - Adds support for urlencoded/json formats, PAPI scripts in setup and _function 
+## 01/29/14 (Madhu Kumar) - Creates session per test case basis, if the credentials are given and 
+##                          Sleep cases will not be counted for total number of test cases
+## 07/12/17 (Madhu Kumar) - Generalize the REST Calls
+#
+# Use Libraries 
+use Getopt::Std;
+use XML::Simple;
+use Data::Dumper;
+use IO::File;
+use XML::Writer;
+use FindBin;
+use lib "$FindBin::Bin/../lib";
+use Time::HiRes qw(gettimeofday tv_interval);
+use RESTMgr;
+use JSON::Parse 'parse_json';
+use File::Path qw(mkpath);
+
+my %option = ();
+getopts("f:v:w:t:", \%option);
+
+my $filename;
+my $vip;
+my $compatibility;
+my @versions;
+my $content_type;
+my $content_body;
+my @content_types = ("xml", "json", "urlencoded");
+
+if(defined($option{f})) {
+  $filename = $option{f};
+} else {
+  print STDERR "TestSuite name is required.\n\n";
+  print_help_and_exit();
+}
+
+if(defined($option{v})) {
+  $vip = $option{v};
+} else {
+    print STDERR "Host is required.\n\n";
+    print_help_and_exit();
+}
+
+if(defined($option{t})) {
+    $content_type = $option{t};
+    if(!grep(/^$content_type$/, @content_types)) {
+	print STDERR "Invalid Content-Type '$content_type'. Content-Type must be xml, json or urlencoded.\n\n";
+	print_help_and_exit();
+    }
+} else {
+    # Sets the default Content-Type to 'json'
+    $content_type = "json";
+}
+my $host = "https://$vip/";
+my $ua = RESTMgr::create_session($vip);
+
+# Defines the 'suites' directory to be used for execution
+my $suites_dir = "$FindBin::Bin/../tests";
+
+print "Test Suite Name : $suites_dir/$filename\n";
+print "Host Address : $vip\n";
+
+# Creates the Results Directory
+my $timestamp = `date +%Y-%m-%d-%H-%M-%S`;
+chomp $timestamp;
+my $results = "/home/" . $ENV{USER} . "/wapi_report/" . $timestamp;
+mkpath($results); 
+
+# Sets the PERL5LIB Enviroment Variable
+$ENV{PERL5LIB} = "$results/lib";
+
+my $host = "https://$vip/";
+my $client;
+my $xmlobj = XML::Simple->new();
+my %summary;
+my ($tc_start_time, $tc_end_time, $total_time, $start_time, $end_time);
+
+#Variables definition for CLI/CURL command execution
+my ($system_command, $cmd_output, $expected_output, $str_to_json);
+
+# To Write the Results into an XML File
+my $output = new IO::File(">$results/summary.xml");
+my $writer = new XML::Writer( OUTPUT => $output );
+my $suite_name;
+$writer->startTag('suite');
+$start_time = [gettimeofday];
+
+my $document = $xmlobj->XMLin("$suites_dir/$filename", KeyAttr => [], ForceArray => ['test', 'object']);
+$suite_name = "Rest API :: $document->{name}";
+    
+    my $testcases = $document->{test};
+    my @exclude_list = split(',', $document->{exclude});
+
+    my $pass = 0;
+    my $fail = 0;
+    $writer->startTag('pass');
+    print "\nStarting the Execution ...\n";
+    print "="x80 . "\n";
+    
+    foreach my $testcase (@$testcases) {
+	$tc_start_time = [gettimeofday];
+	unless(grep(/^$testcase->{info}->{id}$/, @exclude_list)) {
+	    my $url = "$testcase->{object}[0]";
+	    my $id = $testcase->{info}->{id};
+	    my $testcase_name = $testcase->{info}->{name};
+	    my $highlight = "no";
+            $highlight = "yes" if ($testcase->{info}->{name} =~ /\={4}/);
+	    print "$testcase_name ... ";
+	    $current_time = `date`;
+	    $writer->startTag('test');
+	    $writer->dataElement("name", $testcase_name);
+	    $writer->dataElement("id", $id);
+	    $writer->dataElement("highlight", $highlight);
+
+	    my %header;
+	    
+	    my $logfile = "$results/$id.log";
+	    
+	    open(LOG_FILE, ">>$logfile");
+	    print LOG_FILE "TestCase :\n";
+	    print LOG_FILE "="x80 . "\n";
+	    print LOG_FILE RESTMgr::get_xml_from_hash($testcase, "test");
+	    print LOG_FILE "="x80 . "\n";
+            my $exe_time = `date`;
+            print LOG_FILE "Execution Time: $exe_time\n";
+
+            # Sleep command execution, it will not be part of total count
+            if(defined ($testcase->{sleep})) {
+                sleep ($testcase->{sleep});
+		print LOG_FILE "Sleep has been completed successfully!\n";
+		close LOG_FILE;
+                print "PASSED\n";
+		$tc_end_time = [gettimeofday];
+    		$total_time = tv_interval $tc_start_time, $tc_end_time;
+    		$total_time = sprintf("%.4f", $total_time);
+                $writer->dataElement("status", "SLEEP");
+	        $writer->dataElement("time", $total_time);
+            	$writer->dataElement("log", $logfile);
+                $writer->endTag();
+                next;
+            }            
+
+            # External command execution
+            if(defined ($testcase->{external})) {
+                my @param_values = @{$testcase->{external}->{param}->{value}};
+                my $input = "";
+                for ($i=0;$i<@param_values;$i++) {
+                    if( exists $param{$param_values[$i]}) {
+                        print "PARAM Exist: $param_values[$i]\n";
+                        $param_values[$i] = $param{$param_values[$i]};
+                    }
+                    $input .= "$param_values[$i] ";
+                }
+                my $cmd_output = `$testcase->{external}->{command} $testcase->{external}->{options} $input 2>&1`;
+                print LOG_FILE "External command: $testcase->{external}->{command} $testcase->{external}->{options} $input\n";
+                print LOG_FILE "Output:\n";
+                print LOG_FILE "="x80 . "\n";
+                print LOG_FILE $cmd_output;
+                close LOG_FILE;
+                print "PASSED\n";
+                $tc_end_time = [gettimeofday];
+                $total_time = tv_interval $tc_start_time, $tc_end_time;
+                $total_time = sprintf("%.4f", $total_time);
+                $writer->dataElement("status", "SETUP");
+                $writer->dataElement("time", $total_time);
+                $writer->dataElement("log", $logfile);
+                $writer->endTag();
+                next;
+            }
+            print LOG_FILE "CURL Command: curl -X $testcase->{action} https://$vip$url ";
+            print LOG_FILE "-d '<Request_Content>'" if ($testcase->{action} eq "PUT" || $testcase->{action} eq "POST");
+            print LOG_FILE "\n\n";
+            print LOG_FILE "URL : https://$vip/$url\n";
+            print LOG_FILE "Action : $testcase->{action}\n";
+            close LOG_FILE;
+
+	    # Creates Content-Body for PUT and POST requests
+	    if($testcase->{action} eq "PUT" || $testcase->{action} eq "POST") {
+		$header{'Content-Type'} = "application/xml"  if($content_type eq "xml");
+		$header{'Content-Type'} = "application/json" if($content_type eq "json");
+		$header{'Content-Type'} = "application/x-www-form-urlencoded" if($content_type eq "urlencoded");
+		$content_body = RESTMgr::create_content_body($testcase->{request}, $content_type);
+	    }
+	    
+	    # Sends the Request
+	    $url = ${host}.${url}; #No Auth Request, thus preffix host with url
+	    $client = RESTMgr::get($host, $ua, $logfile, $url, $testcase->{request}, %header) if($testcase->{action} eq "GET");
+	    $client = RESTMgr::post($host, $ua, $logfile, $url, $content_body, \%header)      if($testcase->{action} eq "POST");
+	    $client = RESTMgr::put($host, $ua, $logfile, $url, $content_body, \%header)       if($testcase->{action} eq "PUT");
+	    $client = RESTMgr::del($host, $ua, $url, %header)                                 if($testcase->{action} eq "DELETE");
+
+	    # Compares the actual Response with the expected one
+            if($testcase->{response} =~ /SKIP.*VALIDATION/i) {
+                print "PASSED\n";
+                $writer->dataElement("status", "SETUP");
+            } elsif(RESTMgr::compare_responses($logfile, $testcase->{response}, $client)) {
+                print "PASSED\n";
+		$pass++;
+		$writer->dataElement("status", "PASS");
+	    } else {
+		print "FAILED\n";
+		$fail++;
+		$writer->dataElement("status", "FAIL");
+	    }
+            $tc_end_time = [gettimeofday];
+            $total_time = tv_interval $tc_start_time, $tc_end_time;
+            $total_time = sprintf("%.4f", $total_time);
+            $writer->dataElement("time", $total_time);
+            $writer->dataElement("log", $logfile);
+	    $writer->endTag();
+	}
+    }
+    
+    $end_time = [gettimeofday];
+    $total_time = tv_interval $start_time, $end_time;
+    $total_time = sprintf("%.4f", $total_time);
+    $summary{'pass'} = $pass;
+    $summary{'fail'} = $fail;
+    # To include the summary in the html report
+    $writer->startTag('summary');
+    $writer->dataElement("pass", $pass);
+    $writer->dataElement("fail", $fail);
+    $writer->dataElement("total", ($pass+$fail));
+    $writer->dataElement("total_time", $total_time);
+    $writer->endTag();
+    $writer->endTag(); # Ends 'pass' element
+
+    # Summary
+    print "\nSummary\n";
+    print "="x80 . "\n";
+    print "Total  : " . ($pass+$fail) . "\n";
+    print "Passed : $pass\n";
+    print "Failed : $fail\n";
+
+$writer->dataElement('name', $suite_name);
+$writer->endTag(); # Ends 'suite', the root element
+$writer->end();
+
+# Report Generation
+RESTMgr::generate_report($results, 'summary.xml');
+
+print "\nReport\n";
+print "="x80 . "\n";
+my $hostname = `hostname -i | cut -d ' ' -f 1`;
+chomp $hostname;
+print "http://$hostname/wapi_report/$timestamp/" . "\n";
+
+sub print_help_and_exit {
+    print "run_REST will parse the test suite, execute the cases in that by sending WAPI calls, \n";
+    print "compare the response with the expected result and generate the report.\n\n";
+    print "Usage   : $0 -f TEST_SUITE_NAME -v HOST Address\n";
+    print "Options :\n";
+    print "  -f\tTest Suite Name (XML File)\n";
+    print "  -v\tEither Name of the Host or IP Address of the Host\n";
+    print "Example : $0 -f restinput.xml -v jsonplaceholder.typicode.com\n";
+    print "       or $0 -f network.xml -v 10.35.110.1 \n";
+    exit 1;
+}

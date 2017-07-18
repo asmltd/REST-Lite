@@ -1,0 +1,76 @@
+<!--
+# File : restinput.xml
+# Description : Rest Services Test
+# Author : Madhu Kumar
+# History :
+# 07/12/17 (Madhu Kumar) - Created
+#
+-->
+<TestSuite>
+
+  <name>Rest Services Test</name>
+
+  <test>
+    <info>
+      <name>Rest POST operation</name>
+      <id>1</id>
+      <desc>Rest POST operation</desc>
+    </info>
+    <object>posts</object>
+    <action>POST</action>
+    <request>
+	<title>creation test</title>
+	<body>Hello World</body>
+	<userId type="int">1</userId>
+    </request>
+    <response>
+      <code>201</code>
+    </response>
+  </test>
+
+  <test>
+    <info>
+      <name>Rest GET operation</name>
+      <id>2</id>
+      <desc>Rest GET operation</desc>
+    </info>
+    <object>posts/1</object>
+    <action>GET</action>
+    <request>
+    </request>
+    <response>
+      <code>200</code>
+    </response>
+  </test>
+
+  <test>
+    <info>
+      <name>Rest PUT operation</name>
+      <id>3</id>
+      <desc>Rest PUT operation</desc>
+    </info>
+    <object>posts/1</object>
+    <action>PUT</action>
+    <request>
+      <body>Content Changed</body>
+    </request>
+    <response>
+      <code>200</code>
+    </response>
+  </test>
+
+   <test>
+    <info>
+      <name>Rest DELETE operation</name>
+      <id>4</id>
+      <desc>Rest DELETE operation</desc>
+    </info>
+    <object>posts/1</object>
+    <action>DELETE</action>
+    <request>    </request>
+    <response>
+      <code>200</code>
+    </response>
+  </test>
+
+</TestSuite>
