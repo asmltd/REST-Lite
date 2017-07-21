@@ -1,19 +1,12 @@
 #!/usr/bin/perl
 #
-# run_REST - parses the XML input data file, generates WAPI calls out of it, sends the requests, 
+# run_REST - parses the XML input test file, generates REST API calls out of it, sends the requests, 
 #            compares the responses with the expected output and generates the report
 #
-# Author : Subramani R
+# Author : Subramani Ramanathan & Madhu Kumar
 # History :
-## 08/21/12 (Subramani R) - Created
-## 09/03/12 (Subramani R) - Modified to use same session for all the operations in a test execution
-## 09/11/12 (Subramani R) - Support is added for POST and PUT to send requests with JSON content-type
-## 09/13/12 (Subramani R) - Changed the 'get_reference' subroutine, because now the reference return '/'
-##                          instead of '%2F'
-## 08/05/13 (Madhu Kumar) - Adds support for urlencoded/json formats, PAPI scripts in setup and _function 
-## 01/29/14 (Madhu Kumar) - Creates session per test case basis, if the credentials are given and 
-##                          Sleep cases will not be counted for total number of test cases
-## 07/12/17 (Madhu Kumar) - Generalize the REST Calls
+## 18/07/2017 (Madhu Kumar)          - Initialized with the base scripts
+## 22/07/2017 (Subramani Ramanathan) - Modified the report directory and URL wrt client
 #
 # Use Libraries 
 use Getopt::Std;
@@ -75,7 +68,7 @@ print "Host Address : $vip\n";
 # Creates the Results Directory
 my $timestamp = `date +%Y-%m-%d-%H-%M-%S`;
 chomp $timestamp;
-my $results = "/home/" . $ENV{USER} . "/wapi_report/" . $timestamp;
+my $results = "$FindBin::Bin/../reports/" . $timestamp;
 mkpath($results); 
 
 # Sets the PERL5LIB Enviroment Variable
@@ -253,18 +246,26 @@ RESTMgr::generate_report($results, 'summary.xml');
 
 print "\nReport\n";
 print "="x80 . "\n";
-my $hostname = `hostname -i | cut -d ' ' -f 1`;
+
+my $hostname;
+# Check whether it's running inside a container
+`grep docker /proc/1/cgroup 2>&1 >/dev/null`;
+if($? == 0) {
+    $hostname = "localhost";
+} else {
+    $hostname = `hostname -i | cut -d ' ' -f 1`;
+}
 chomp $hostname;
-print "http://$hostname/wapi_report/$timestamp/" . "\n";
+print "http://$hostname/rest-lite/$timestamp/" . "\n";
 
 sub print_help_and_exit {
-    print "run_REST will parse the test suite, execute the cases in that by sending WAPI calls, \n";
+    print "run_REST will parse the test suite, execute the cases in that by sending REST API calls, \n";
     print "compare the response with the expected result and generate the report.\n\n";
     print "Usage   : $0 -f TEST_SUITE_NAME -v HOST Address\n";
     print "Options :\n";
     print "  -f\tTest Suite Name (XML File)\n";
     print "  -v\tEither Name of the Host or IP Address of the Host\n";
-    print "Example : $0 -f restinput.xml -v jsonplaceholder.typicode.com\n";
+    print "Example : $0 -f test_fake_rest_api_server.xml -v jsonplaceholder.typicode.com\n";
     print "       or $0 -f network.xml -v 10.35.110.1 \n";
     exit 1;
 }
